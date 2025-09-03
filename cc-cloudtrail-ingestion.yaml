@@ -71,6 +71,7 @@ Resources:
     Condition: ShouldCreateNewBucket
     DependsOn:
       - SQSQueue
+      - QueuePolicy
     Properties:
       BucketName: !Sub "${BucketName}${AWS::AccountId}"
       NotificationConfiguration:
