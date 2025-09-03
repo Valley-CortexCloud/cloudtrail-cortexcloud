@@ -187,7 +187,10 @@ Resources:
             Resource: !GetAtt SQSQueue.Arn
             Condition:
               ArnLike:
-                aws:SourceArn: !If [ShouldCreateNewBucket, !GetAtt S3BUCKET.Arn, !Ref ExistingBucketARN]
+                aws:SourceArn: !If
+                  - ShouldCreateNewBucket
+                  - !Sub "arn:aws:s3:::${BucketName}${AWS::AccountId}"  # <-- The fix
+                  - !Ref ExistingBucketARN
           # FIXED: Split into two statements for SQSQueue and SQSDeadLetterQueue
           - Sid: AllowCortexXSIAMToMainQueue
             Effect: Allow
