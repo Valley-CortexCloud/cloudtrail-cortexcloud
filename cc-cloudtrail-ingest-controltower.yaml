@@ -1,0 +1,185 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Cortex XSIAM | Cortex Cloud Integration - SQS Queue, DLQ, and Cross-Account IAM Role for AWS Control Tower S3 Logs'
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: "Control Tower Environment Details (Account B & Account A)"
+        Parameters:
+          - CentralBucketName
+          - S3BucketAccountId
+          - KmsKeyArn
+      - Label:
+          default: "Cortex XSIAM Configuration"
+        Parameters:
+          - CortexXSIAMAccountID
+          - ExternalId
+      - Label:
+          default: "Queue Configuration"
+        Parameters:
+          - QueueNameFromUser
+          - DLQMaxReceiveCount
+
+Parameters:
+  CentralBucketName:
+    Type: String
+    Description: 'REQUIRED: The exact name of the existing Central CloudTrail S3 Bucket (managed by Control Tower).'
+  S3BucketAccountId:
+    Type: String
+    Description: 'REQUIRED: The AWS Account ID where the Central S3 Bucket resides (The Log Archive Account).'
+  KmsKeyArn:
+    Type: String
+    Default: ''
+    Description: 'OPTIONAL: The KMS Key ARN used to encrypt the CloudTrail logs. Leave blank if the bucket is not encrypted with a custom KMS key.'
+  CortexXSIAMAccountID:
+    Type: String
+    Default: '006742885340'
+    Description: 'REQUIRED: The AWS account ID provided by Cortex XSIAM for cross-account access.'
+  ExternalId:
+    Type: String
+    Description: 'REQUIRED: The External ID provided by Cortex XSIAM to prevent the confused deputy problem.'
+  QueueNameFromUser:
+    Type: String
+    Default: 'cortex-xsiam-cloudtrail-sqs'
+    Description: 'The base name for the SQS Queue.'
+  DLQMaxReceiveCount:
+    Type: Number
+    Default: 3
+    Description: 'The number of times a message is received before moving to the Dead Letter Queue.'
+
+Conditions:
+  HasKMSKey: !Not [!Equals [!Ref KmsKeyArn, '']]
+
+Resources:
+  # ---------------------------------------------------------
+  # 1. Dead Letter Queue
+  # ---------------------------------------------------------
+  SQSDeadLetterQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub "${QueueNameFromUser}-DLQ-${AWS::Region}"
+      MessageRetentionPeriod: 345600
+      Tags:
+        - Key: ManagedBy
+          Value: PaloAltoNetworks
+        - Key: Purpose
+          Value: CortexXSIAMCloudTrailLogsDLQ
+
+  # ---------------------------------------------------------
+  # 2. Main SQS Queue (With Cortex-optimized VisibilityTimeout)
+  # ---------------------------------------------------------
+  SQSQueue:
+    Type: AWS::SQS::Queue
+    DependsOn: SQSDeadLetterQueue
+    Properties:
+      QueueName: !Sub "${QueueNameFromUser}-${AWS::Region}"
+      DelaySeconds: 5
+      ReceiveMessageWaitTimeSeconds: 0
+      VisibilityTimeout: 300 # 5 minutes to align with standard SIEM processing
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt SQSDeadLetterQueue.Arn
+        maxReceiveCount: !Ref DLQMaxReceiveCount
+      Tags:
+        - Key: ManagedBy
+          Value: PaloAltoNetworks
+        - Key: Purpose
+          Value: CortexXSIAMCloudTrailLogs
+
+  # ---------------------------------------------------------
+  # 3. Queue Policy (Allows Cross-Account S3 Event Notifications)
+  # ---------------------------------------------------------
+  SQSQueuePolicy:
+    Type: AWS::SQS::QueuePolicy
+    Properties:
+      Queues:
+        - !Ref SQSQueue
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AllowS3ToSendMessage
+            Effect: Allow
+            Principal:
+              Service: s3.amazonaws.com
+            Action: sqs:SendMessage
+            Resource: !GetAtt SQSQueue.Arn
+            Condition:
+              ArnLike:
+                'aws:SourceArn': !Sub 'arn:aws:s3:::${CentralBucketName}'
+              StringEquals:
+                'aws:SourceAccount': !Ref S3BucketAccountId
+
+  # ---------------------------------------------------------
+  # 4. Base Cross-Account IAM Role for Cortex
+  # ---------------------------------------------------------
+  CortexCrossAccountRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "CortexXSIAMCloudTrailRole-${AWS::Region}"
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              AWS: !Sub 'arn:aws:iam::${CortexXSIAMAccountID}:root'
+            Action: 'sts:AssumeRole'
+            Condition:
+              StringEquals:
+                'sts:ExternalId': !Ref ExternalId
+      Policies:
+        - PolicyName: CortexXSIAMIntegrationPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              # Access to the local Queues
+              - Sid: LocalQueueAccess
+                Effect: Allow
+                Action:
+                  - 'sqs:ReceiveMessage'
+                  - 'sqs:DeleteMessage'
+                  - 'sqs:GetQueueAttributes'
+                  - 'sqs:ChangeMessageVisibility'
+                Resource: 
+                  - !GetAtt SQSQueue.Arn
+                  - !GetAtt SQSDeadLetterQueue.Arn
+              # Read access to the remote Control Tower Bucket
+              - Sid: RemoteBucketRead
+                Effect: Allow
+                Action:
+                  - 's3:GetObject'
+                  - 's3:ListBucket'
+                  - 's3:GetBucketLocation'
+                Resource:
+                  - !Sub 'arn:aws:s3:::${CentralBucketName}/*'
+                  - !Sub 'arn:aws:s3:::${CentralBucketName}'
+
+  # ---------------------------------------------------------
+  # 5. Conditional KMS Policy (Only deployed if KMS Key provided)
+  # ---------------------------------------------------------
+  CortexXSIAMKMSPolicy:
+    Type: AWS::IAM::Policy
+    Condition: HasKMSKey
+    Properties:
+      PolicyName: CortexXSIAMKMSAccess
+      Roles:
+        - !Ref CortexCrossAccountRole
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: RemoteKeyDecrypt
+            Effect: Allow
+            Action: 
+              - 'kms:Decrypt'
+              - 'kms:GenerateDataKey'
+            Resource: !Ref KmsKeyArn
+
+Outputs:
+  SQSQueueURL:
+    Description: 'URL of the main SQS Queue (Save this for the Cortex UI setup)'
+    Value: !Ref SQSQueue
+  SQSQueueARN:
+    Description: 'ARN of the main SQS Queue (Use this when manually adding the Event Notification to the S3 Bucket)'
+    Value: !GetAtt SQSQueue.Arn
+  CortexRoleArn:
+    Description: 'ARN of the IAM Role (Save this for the KMS Key Policy and Cortex UI setup)'
+    Value: !GetAtt CortexCrossAccountRole.Arn
