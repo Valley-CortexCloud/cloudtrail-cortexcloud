@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: 'Cortex XSIAM | Cortex Cloud Integration - SQS Queue, DLQ, and Cross-Account IAM Role for AWS Control Tower S3 Logs'
+Description: 'Cortex XSIAM Integration - SQS Queue, DLQ, and Cross-Account IAM Role for AWS Control Tower S3 Logs'
 
 Metadata:
   AWS::CloudFormation::Interface:
@@ -31,7 +31,9 @@ Parameters:
   KmsKeyArn:
     Type: String
     Default: ''
-    Description: 'OPTIONAL: The KMS Key ARN used to encrypt the CloudTrail logs. Leave blank if the bucket is not encrypted with a custom KMS key.'
+    AllowedPattern: '^$|^arn:aws:kms:.*'
+    ConstraintDescription: 'You must provide a full ARN starting with "arn:aws:kms:" or leave this field completely blank. Do NOT paste just the Key ID.'
+    Description: 'OPTIONAL: The FULL ARN of the KMS Key used to encrypt the CloudTrail logs (e.g., arn:aws:kms:us-east-1:123456789012:key/1234...). Leave blank if not using a custom KMS key.'
   CortexXSIAMAccountID:
     Type: String
     Default: '006742885340'
@@ -183,3 +185,6 @@ Outputs:
   CortexRoleArn:
     Description: 'ARN of the IAM Role (Save this for the KMS Key Policy and Cortex UI setup)'
     Value: !GetAtt CortexCrossAccountRole.Arn
+  ExternalIdUsed:
+    Description: 'The External ID configured for this integration (Save this for the Cortex UI setup)'
+    Value: !Ref ExternalId
