@@ -25,7 +25,7 @@ Before initiating the deployment, collect the following environmental variables:
 * **S3BucketAccountId:** The 12-digit AWS Account ID of your Log Archive Account.
 * **KmsKeyArn:** The ARN of the KMS key used for log encryption (leave blank if your bucket uses default Amazon S3 managed keys).
 * **CortexXSIAMAccountID:** The Palo Alto Networks AWS account ID provided in your Cortex UI (typically `006742885340` for standard or `685269782068` for FedRAMP environments).
-* **ExternalId:** The unique External ID generated in your Cortex XSIAM setup portal (utilized to prevent the confused deputy problem).
+* **ExternalId:** The unique External ID generated in your Cortex XSIAM setup portal (utilized to prevent the confused deputy problem). Generate a random UUID v4 (e.g., using https://www.uuidgenerator.net/version4) and paste it here. This is used for the IAM role assumption.
 
 ### 2. Execute the CloudFormation Deployment
 1. Log in to the **Security Tooling Account** (Ensure your AWS Console region matches your Log Archive region).
